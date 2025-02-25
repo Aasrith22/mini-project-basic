@@ -33,7 +33,8 @@ const API_ENDPOINTS = {
     },
     weather: {
         data: 'https://api.openweathermap.org/data/2.5/weather'
-    }
+    },
+    regions: 'https://api.example.com/regions' // Add the API endpoint for regions
 };
 
 // Function to fetch data from API with authentication
@@ -71,6 +72,20 @@ async function fetchWeatherData(lat, lon) {
         lon: lon,
         appid: window.config.OPENWEATHER_API_KEY,
         units: 'metric'
+    };
+    
+    return await fetchFromAPI(API_ENDPOINTS.weather.data, params);
+}
+
+// Function to fetch historical weather data for the month
+async function fetchMonthlyWeatherData(lat, lon, month, year) {
+    const params = {
+        lat: lat,
+        lon: lon,
+        appid: window.config.OPENWEATHER_API_KEY,
+        units: 'metric',
+        month: month,
+        year: year
     };
     
     return await fetchFromAPI(API_ENDPOINTS.weather.data, params);
@@ -116,6 +131,32 @@ async function updateRegionDropdown(cropType) {
     }
 }
 
+// Function to fetch regions in India
+async function fetchRegions() {
+    try {
+        const response = await fetch(`${API_ENDPOINTS.regions}?apikey=${window.config.ALPHA_VANTAGE_API_KEY}`); // Use the correct key from config.js
+        if (!response.ok) {
+            throw new Error('Failed to fetch regions');
+        }
+        const regions = await response.json();
+        populateRegionDropdown(regions);
+    } catch (error) {
+        console.error('Error fetching regions:', error);
+    }
+}
+
+// Function to populate the Region dropdown
+function populateRegionDropdown(regions) {
+    const regionSelect = document.getElementById('region');
+    regionSelect.innerHTML = '<option value="">Select Region</option>'; // Clear existing options
+    regions.forEach(region => {
+        const option = document.createElement('option');
+        option.value = region.code; // Assuming the API returns a code for each region
+        option.textContent = region.name; // Assuming the API returns a name for each region
+        regionSelect.appendChild(option);
+    });
+}
+
 // Function to process stock data for visualization
 function processStockData(data) {
     if (!data || !data['Time Series (Daily)']) return null;
@@ -125,6 +166,31 @@ function processStockData(data) {
         date: date,
         value: parseFloat(values['4. close'])
     })).reverse();
+}
+
+// Function to process monthly weather data
+function processMonthlyWeatherData(data) {
+    const monthlyData = {};
+    data.forEach(entry => {
+        const date = new Date(entry.date);
+        const month = date.getMonth();
+        const year = date.getFullYear();
+        const key = `${year}-${month}`;
+        
+        if (!monthlyData[key]) {
+            monthlyData[key] = { temperature: 0, rainfall: 0, count: 0 };
+        }
+        monthlyData[key].temperature += entry.temperature;
+        monthlyData[key].rainfall += entry.rainfall;
+        monthlyData[key].count++;
+    });
+    
+    // Calculate averages
+    return Object.entries(monthlyData).map(([key, values]) => ({
+        date: key,
+        averageTemperature: values.temperature / values.count,
+        totalRainfall: values.rainfall
+    }));
 }
 
 // Function to update tech visualization with real data
@@ -168,26 +234,22 @@ async function updateTechVisualization() {
 async function updateAgricultureVisualization() {
     const region = document.getElementById('region').value;
     const metric = document.getElementById('weatherMetric').value;
+    const currentDate = new Date();
+    const month = currentDate.getMonth() + 1; // Months are 0-based
+    const year = currentDate.getFullYear();
     
     if (!region || !metric) return;
     
     try {
         const coords = window.config.REGION_COORDINATES[region];
-        const weatherData = await fetchWeatherData(coords.lat, coords.lon);
+        const weatherData = await fetchMonthlyWeatherData(coords.lat, coords.lon, month, year);
+        const processedData = processMonthlyWeatherData(weatherData);
         
-        if (weatherData) {
-            const processedData = [{
-                date: new Date().toISOString().split('T')[0],
-                temperature: weatherData.main.temp,
-                humidity: weatherData.main.humidity,
-                rainfall: weatherData.rain ? weatherData.rain['1h'] || 0 : 0,
-                name: region
-            }];
-            
+        if (processedData) {
             createVisualization(
                 processedData,
                 'agricultureVisualization',
-                `${region} Weather Data`,
+                `${region} Monthly Weather Data`,
                 metric,
                 weatherMetrics[metric]
             );
@@ -444,4 +506,7 @@ document.addEventListener('DOMContentLoaded', function() {
     if (analyzeAgricultureBtn) {
         analyzeAgricultureBtn.addEventListener('click', updateAgricultureVisualization);
     }
+    
+    // Fetch regions dynamically
+    fetchRegions();
 });
