@@ -26,39 +26,186 @@ const weatherMetrics = {
     sunshine: 'hours'
 };
 
+// API endpoints
+const API_ENDPOINTS = {
+    tech: {
+        stockData: 'https://www.alphavantage.co/query',
+    },
+    weather: {
+        data: 'https://api.openweathermap.org/data/2.5/weather'
+    }
+};
+
+// Function to fetch data from API with authentication
+async function fetchFromAPI(endpoint, params = {}) {
+    try {
+        const url = new URL(endpoint);
+        Object.keys(params).forEach(key => url.searchParams.append(key, params[key]));
+        
+        const response = await fetch(url);
+        if (!response.ok) {
+            throw new Error(`HTTP error! status: ${response.status}`);
+        }
+        return await response.json();
+    } catch (error) {
+        console.error('API fetch error:', error);
+        return null;
+    }
+}
+
+// Function to get stock data from Alpha Vantage
+async function fetchStockData(symbol) {
+    const params = {
+        function: 'TIME_SERIES_DAILY',
+        symbol: symbol,
+        apikey: window.config.ALPHA_VANTAGE_API_KEY
+    };
+    
+    return await fetchFromAPI(API_ENDPOINTS.tech.stockData, params);
+}
+
+// Function to get weather data from OpenWeather
+async function fetchWeatherData(lat, lon) {
+    const params = {
+        lat: lat,
+        lon: lon,
+        appid: window.config.OPENWEATHER_API_KEY,
+        units: 'metric'
+    };
+    
+    return await fetchFromAPI(API_ENDPOINTS.weather.data, params);
+}
+
 // Function to populate company dropdown based on selected category
-function updateCompanyDropdown(category) {
+async function updateCompanyDropdown(category) {
     const companySelect = document.getElementById('techCompany');
     companySelect.innerHTML = '<option value="">Select Company</option>';
+    companySelect.disabled = true;
     
     if (category && companyData[category]) {
-        companyData[category].forEach(company => {
+        // Filter companies that have stock symbols
+        const companies = companyData[category].filter(company => 
+            window.config.COMPANY_SYMBOLS[company] !== null
+        );
+        
+        companies.forEach(company => {
             const option = document.createElement('option');
-            option.value = company;
+            option.value = window.config.COMPANY_SYMBOLS[company];
             option.textContent = company;
             companySelect.appendChild(option);
         });
         companySelect.disabled = false;
-    } else {
-        companySelect.disabled = true;
     }
 }
 
 // Function to populate region dropdown based on selected crop
-function updateRegionDropdown(cropType) {
+async function updateRegionDropdown(cropType) {
     const regionSelect = document.getElementById('region');
     regionSelect.innerHTML = '<option value="">Select Region</option>';
+    regionSelect.disabled = true;
     
     if (cropType && regionData[cropType]) {
-        regionData[cropType].forEach(region => {
+        const regions = Object.keys(window.config.REGION_COORDINATES);
+        regions.forEach(region => {
             const option = document.createElement('option');
             option.value = region;
             option.textContent = region;
             regionSelect.appendChild(option);
         });
         regionSelect.disabled = false;
-    } else {
-        regionSelect.disabled = true;
+    }
+}
+
+// Function to process stock data for visualization
+function processStockData(data) {
+    if (!data || !data['Time Series (Daily)']) return null;
+    
+    const timeSeriesData = data['Time Series (Daily)'];
+    return Object.entries(timeSeriesData).map(([date, values]) => ({
+        date: date,
+        value: parseFloat(values['4. close'])
+    })).reverse();
+}
+
+// Function to update tech visualization with real data
+async function updateTechVisualization() {
+    const company = document.getElementById('techCompany').value;
+    const metric = document.getElementById('financialMetric').value;
+    
+    if (!company || !metric) return;
+    
+    try {
+        const stockData = await fetchStockData(company);
+        const processedData = processStockData(stockData);
+        
+        if (processedData) {
+            createVisualization(
+                processedData,
+                'techVisualization',
+                `${company} Stock Price`,
+                'value',
+                'Price (USD)'
+            );
+        } else {
+            document.getElementById('techVisualization').innerHTML = 
+                '<div class="alert alert-warning">No data available for visualization</div>';
+        }
+    } catch (error) {
+        console.error('Error updating tech visualization:', error);
+        // Fallback to sample data
+        const sampleData = generateTechData(category, company, metric);
+        createVisualization(
+            sampleData,
+            'techVisualization',
+            `${company} Data (Sample)`,
+            metric,
+            'Value'
+        );
+    }
+}
+
+// Function to update agriculture visualization with real weather data
+async function updateAgricultureVisualization() {
+    const region = document.getElementById('region').value;
+    const metric = document.getElementById('weatherMetric').value;
+    
+    if (!region || !metric) return;
+    
+    try {
+        const coords = window.config.REGION_COORDINATES[region];
+        const weatherData = await fetchWeatherData(coords.lat, coords.lon);
+        
+        if (weatherData) {
+            const processedData = [{
+                date: new Date().toISOString().split('T')[0],
+                temperature: weatherData.main.temp,
+                humidity: weatherData.main.humidity,
+                rainfall: weatherData.rain ? weatherData.rain['1h'] || 0 : 0,
+                name: region
+            }];
+            
+            createVisualization(
+                processedData,
+                'agricultureVisualization',
+                `${region} Weather Data`,
+                metric,
+                weatherMetrics[metric]
+            );
+        } else {
+            document.getElementById('agricultureVisualization').innerHTML = 
+                '<div class="alert alert-warning">No data available for visualization</div>';
+        }
+    } catch (error) {
+        console.error('Error updating agriculture visualization:', error);
+        // Fallback to sample data
+        const sampleData = generateAgricultureData(crop, region, metric);
+        createVisualization(
+            sampleData,
+            'agricultureVisualization',
+            `${region} Data (Sample)`,
+            metric,
+            weatherMetrics[metric]
+        );
     }
 }
 
@@ -246,36 +393,6 @@ function generateAgricultureData(crop, region, metric) {
     return data;
 }
 
-// Function to update tech visualization
-function updateTechVisualization() {
-    const category = document.getElementById('techCategory').value;
-    const company = document.getElementById('techCompany').value;
-    const metric = document.getElementById('financialMetric').value;
-    
-    if (!category || !company || !metric) return;
-    
-    const data = generateTechData(category, company, metric);
-    const title = `${metric.replace(/_/g, ' ').toUpperCase()} Analysis for ${company}`;
-    const yAxisLabel = metric.replace(/_/g, ' ').toUpperCase();
-    
-    createVisualization(data, 'techVisualization', title, metric, yAxisLabel);
-}
-
-// Function to update agriculture visualization
-function updateAgricultureVisualization() {
-    const crop = document.getElementById('crop').value;
-    const region = document.getElementById('region').value;
-    const metric = document.getElementById('weatherMetric').value;
-    
-    if (!crop || !region || !metric) return;
-    
-    const data = generateAgricultureData(crop, region, metric);
-    const title = `${metric.toUpperCase()} Analysis for ${crop} in ${region}`;
-    const yAxisLabel = `${metric.toUpperCase()} ${weatherMetrics[metric]}`;
-    
-    createVisualization(data, 'agricultureVisualization', title, metric, yAxisLabel);
-}
-
 // Event listeners
 document.addEventListener('DOMContentLoaded', function() {
     // Tech & Finance event listeners
@@ -285,8 +402,8 @@ document.addEventListener('DOMContentLoaded', function() {
     const analyzeTechBtn = document.getElementById('analyzeTech');
     
     if (techCategory) {
-        techCategory.addEventListener('change', function() {
-            updateCompanyDropdown(this.value);
+        techCategory.addEventListener('change', async function() {
+            await updateCompanyDropdown(this.value);
             validateTechSelections();
         });
     }
@@ -310,8 +427,8 @@ document.addEventListener('DOMContentLoaded', function() {
     const analyzeAgricultureBtn = document.getElementById('analyzeAgriculture');
     
     if (cropSelect) {
-        cropSelect.addEventListener('change', function() {
-            updateRegionDropdown(this.value);
+        cropSelect.addEventListener('change', async function() {
+            await updateRegionDropdown(this.value);
             validateAgricultureSelections();
         });
     }
